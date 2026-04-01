@@ -5,7 +5,6 @@ import json
 import uuid
 from collections.abc import Sequence
 from typing import Any
-
 import regex as re
 
 from vllm.entrypoints.openai.chat_completion.protocol import (
@@ -25,6 +24,7 @@ from vllm.tool_parsers.abstract_tool_parser import (
     Tool,
     ToolParser,
 )
+from vllm.sampling_params import StructuredOutputsParams
 
 logger = init_logger(__name__)
 
@@ -449,3 +449,72 @@ class MinimaxM2ToolParser(ToolParser):
             return DeltaMessage(content="")
 
         return None
+
+    def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
+        request = super().adjust_request(request)
+
+        if request.structured_outputs is not None:
+            return request
+
+        if request.tools and request.tool_choice in ("auto", None):
+            tag_json = self._build_structural_tag(request.tools)
+            if tag_json is not None:
+                request.structured_outputs = StructuredOutputsParams(
+                    structural_tag=tag_json
+                )
+
+        if request.tools and request.tool_choice != "none":
+            request.skip_special_tokens = False
+
+        return request
+
+    def _build_structural_tag(self, tools) -> str | None:
+        """Build a structural_tag JSON from tools for guided decoding."""
+        tags = []
+        for tool in tools:
+            name = tool.function.name
+            params = tool.function.parameters
+
+            tags.append(
+                {
+                    "type": "tag",
+                    "begin": f"<invoke name=\"{name}\">\n",
+                    "content": {
+                        "type": "json_schema",
+                        "json_schema": params,
+                        "style": "minimax_xml"
+                    },
+                    "end": "</invoke>\n"
+                }
+            )
+
+        if not tags:
+            return None
+
+        structural_tag = {
+            "type": "structural_tag",
+            "format": {
+                "type": "triggered_tags",
+                "triggers": [
+                    "<minimax:tool_call>"
+                ],
+                "tags": [
+                    {
+                        "type": "tag",
+                        "begin": "<minimax:tool_call>\n",
+                        "content": {
+                            "type": "tags_with_separator",
+                            "tags": tags,
+                            "separator": "\n",
+                            "at_least_one": True,
+                            "stop_after_first": False
+                        },
+                        "end": "</minimax:tool_call>\n"
+                    }
+                ],
+                "at_least_one": False,
+                "stop_after_first": False,
+                "excludes": ["<think>","</think>"]
+            }
+        }
+        return json.dumps(structural_tag)
