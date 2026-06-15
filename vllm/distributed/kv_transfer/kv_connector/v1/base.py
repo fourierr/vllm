@@ -221,11 +221,16 @@ class KVConnectorBase_V1(ABC):
         self._connector_metadata = connector_metadata
 
     def clear_connector_metadata(self) -> None:
-        """Clear the connector metadata.
+        """清除 connector 元数据。
 
-        This function should be called by the model runner every time
-        after the model execution.
+        该方法应该在每次模型执行后由 model runner 调用。
+        设置 self._connector_metadata = None 以释放对元数据对象的引用。
+
+        调用时机：模型执行完成之后
+        作用：避免内存泄漏，确保下次执行时使用新的元数据
         """
+        # 清除元数据引用，将其设置为 None
+        # 这样可以让 GC 回收元数据对象，释放内存
         self._connector_metadata = None
 
     def _get_connector_metadata(self) -> KVConnectorMetadata:
